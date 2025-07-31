@@ -16,16 +16,84 @@ export function Web3Provider({ children }) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState(null);
 
-  // Check if wallet is already connected in profile
+  // Check if wallet is already connected
   useEffect(() => {
-    if (profile?.wallet_address) {
-      setWalletAddress(profile.wallet_address);
-      // Initialize provider
-      if (window.ethereum) {
-        setProvider(new ethers.BrowserProvider(window.ethereum));
+    const checkWalletConnection = async () => {
+      if (!window.ethereum) return;
+
+      try {
+        // Check if MetaMask is connected
+        const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+        
+        if (accounts.length > 0) {
+          const connectedAddress = accounts[0];
+          
+          // Create provider
+          const newProvider = new ethers.BrowserProvider(window.ethereum);
+          setProvider(newProvider);
+          
+          // If we have a saved address in profile, check if it matches
+          if (profile?.wallet_address) {
+            if (profile.wallet_address.toLowerCase() === connectedAddress.toLowerCase()) {
+              setWalletAddress(connectedAddress);
+            } else {
+              // Address mismatch - user switched accounts in MetaMask
+              console.log('Wallet address mismatch, updating profile...');
+              setWalletAddress(connectedAddress);
+              if (user?.id) {
+                await saveWalletAddress(user.id, connectedAddress);
+                updateProfile({ wallet_address: connectedAddress });
+              }
+            }
+          } else {
+            // No saved address but wallet is connected
+            setWalletAddress(connectedAddress);
+            if (user?.id) {
+              await saveWalletAddress(user.id, connectedAddress);
+              updateProfile({ wallet_address: connectedAddress });
+            }
+          }
+        } else {
+          // No accounts connected in MetaMask
+          setWalletAddress('');
+          setProvider(null);
+        }
+      } catch (error) {
+        console.error('Error checking wallet connection:', error);
+        setProvider(null);
+        setWalletAddress('');
       }
+    };
+
+    if (user) {
+      checkWalletConnection();
     }
-  }, [profile]);
+
+    // Listen for account changes
+    if (window.ethereum) {
+      const handleAccountsChanged = (accounts) => {
+        if (accounts.length === 0) {
+          // User disconnected wallet
+          setWalletAddress('');
+          setProvider(null);
+        } else {
+          // User switched accounts
+          const newAddress = accounts[0];
+          setWalletAddress(newAddress);
+          if (user?.id) {
+            saveWalletAddress(user.id, newAddress);
+            updateProfile({ wallet_address: newAddress });
+          }
+        }
+      };
+
+      window.ethereum.on('accountsChanged', handleAccountsChanged);
+
+      return () => {
+        window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
+      };
+    }
+  }, [user, profile?.wallet_address]);
 
   // Connect wallet function
   const connectUserWallet = async () => {
@@ -61,9 +129,16 @@ export function Web3Provider({ children }) {
     }
   };
 
+  // Disconnect wallet function
+  const disconnectWallet = () => {
+    setWalletAddress('');
+    setProvider(null);
+    setError(null);
+  };
+
   // Check if wallet is connected
   const isWalletConnected = () => {
-    return !!walletAddress;
+    return !!walletAddress && !!provider;
   };
 
   // Format wallet address for display
@@ -78,6 +153,7 @@ export function Web3Provider({ children }) {
     isConnecting,
     error,
     connectWallet: connectUserWallet,
+    disconnectWallet,
     isWalletConnected,
     formatAddress,
   };
