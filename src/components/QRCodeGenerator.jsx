@@ -36,69 +36,73 @@ const QRCodeGenerator = ({ courseId, onCodeGenerated }) => {
   }, [expiryTime]);
 
   const generateCode = async () => {
-    if (!walletAddress) {
-      setError('Please connect your wallet to generate attendance code');
-      return;
+  if (!walletAddress || !provider) {
+    setError('Please connect your wallet to generate attendance code');
+    return;
+  }
+
+  try {
+    setIsLoading(true);
+    setIsGettingLocation(true);
+    setError('');
+
+    // Get teacher's current location
+    const location = await getCurrentLocation();
+    const locationName = await getLocationName(location.latitude, location.longitude);
+    
+    setTeacherLocation({
+      ...location,
+      name: locationName
+    });
+    setIsGettingLocation(false);
+
+    // Generate a unique code
+    const code = generateUniqueCode();
+    const validityMinutes = 5;
+
+    // Check if provider and getSigner are available
+    if (!provider.getSigner) {
+      throw new Error('Provider does not support signing. Please check your wallet connection.');
     }
 
-    try {
-      setIsLoading(true);
-      setIsGettingLocation(true);
-      setError('');
+    // Update code on blockchain
+    const signer = await provider.getSigner();
+    await updateAttendanceCode(signer, code, validityMinutes);
 
-      // Get teacher's current location
-      const location = await getCurrentLocation();
-      const locationName = await getLocationName(location.latitude, location.longitude);
-      
-      setTeacherLocation({
-        ...location,
-        name: locationName
-      });
-      setIsGettingLocation(false);
+    // Save to database with location
+    const { data, error } = await createAttendanceCodeWithLocation({
+      teacherId: user.id,
+      courseId,
+      code,
+      validityMinutes,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      locationRadius: 100, // 100 meters radius
+      locationName
+    });
 
-      // Generate a unique code
-      const code = generateUniqueCode();
-      const validityMinutes = 5;
-
-      // Update code on blockchain
-      const signer = await provider.getSigner();
-      await updateAttendanceCode(signer, code, validityMinutes);
-
-      // Save to database with location
-      const { data, error } = await createAttendanceCodeWithLocation({
-        teacherId: user.id,
-        courseId,
-        code,
-        validityMinutes,
-        latitude: location.latitude,
-        longitude: location.longitude,
-        locationRadius: 100, // 100 meters radius
-        locationName
-      });
-
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      // Set the code and expiry time
-      setAttendanceCode(code);
-      
-      // Calculate expiry time (5 minutes from now)
-      const expiry = new Date();
-      expiry.setMinutes(expiry.getMinutes() + validityMinutes);
-      setExpiryTime(expiry);
-
-      // Update parent component
-      onCodeGenerated(code, expiry);
-    } catch (error) {
-      console.error('Error generating attendance code:', error);
-      setError(error.message || 'Failed to generate attendance code');
-      setIsGettingLocation(false);
-    } finally {
-      setIsLoading(false);
+    if (error) {
+      throw new Error(error.message);
     }
-  };
 
+    // Set the code and expiry time
+    setAttendanceCode(code);
+    
+    // Calculate expiry time (5 minutes from now)
+    const expiry = new Date();
+    expiry.setMinutes(expiry.getMinutes() + validityMinutes);
+    setExpiryTime(expiry);
+
+    // Update parent component
+    onCodeGenerated(code, expiry);
+  } catch (error) {
+    console.error('Error generating attendance code:', error);
+    setError(error.message || 'Failed to generate attendance code');
+    setIsGettingLocation(false);
+  } finally {
+    setIsLoading(false);
+  }
+};
   return (
     <div className="bg-white rounded-lg shadow-md p-6 text-center">
       <h3 className="text-lg font-semibold mb-4">Attendance QR Code</h3>
