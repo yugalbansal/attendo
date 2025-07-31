@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import StudentList from '../../components/StudentList';
-import { getTeacherCourses, getStudentsByCourse, getStudentAttendanceByCourse } from '../../utils/supabaseClient';
+// import { getTeacherCourses, getStudentsByCourse, getStudentAttendanceByCourse } from '../../utils/supabaseClient';
 import { BookOpen, Search, Settings, Download, FileText, Users } from 'lucide-react';
 
 const TeacherStudentList = () => {
