@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { getStudentAttendance, getStudentAssignments, submitHomework } from '../../utils/supabaseClient';
 import { 
-  Home, FileText, ClipboardList, User, Calendar, 
+  Home, FileText, ClipboardCheck, User, Calendar, 
   Menu, X, QrCode, Plus, Check, Clock, Download, Video
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
