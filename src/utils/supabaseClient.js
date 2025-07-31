@@ -111,6 +111,21 @@ export const signIn = async (email, password) => {
   return { data, error };
 };
 
+export const signOut = async () => {
+  const { error } = await supabase.auth.signOut();
+  return { error };
+};
+
+export const getCurrentUser = async () => {
+  const { data: { user }, error } = await supabase.auth.getUser();
+  return { user, error };
+};
+
+export const getCurrentSession = async () => {
+  const { data: { session }, error } = await supabase.auth.getSession();
+  return { session, error };
+};
+
 export const getUserProfile = async (userId) => {
   const { data, error } = await supabase
     .from('profiles')
@@ -170,8 +185,93 @@ export const getAvailableCourses = async () => {
     .select('*');
   return { data, error };
 };
-// ========== Fixed Attendance Functions ==========
 
+export const getCourseById = async (courseId) => {
+  const { data, error } = await supabase
+    .from('courses')
+    .select(`
+      *,
+      profiles (
+        id,
+        first_name,
+        last_name
+      )
+    `)
+    .eq('id', courseId)
+    .single();
+  return { data, error };
+};
+
+export const updateCourse = async (courseId, updates) => {
+  const { data, error } = await supabase
+    .from('courses')
+    .update(updates)
+    .eq('id', courseId)
+    .select();
+  return { data, error };
+};
+
+export const deleteCourse = async (courseId) => {
+  const { data, error } = await supabase
+    .from('courses')
+    .delete()
+    .eq('id', courseId);
+  return { data, error };
+};
+
+// ========== Student Course Functions ==========
+export const getStudentCourses = async (studentId) => {
+  try {
+    const { data, error } = await supabase
+      .from('course_students')
+      .select(`
+        *,
+        courses (
+          id,
+          name,
+          code,
+          description,
+          teacher_id,
+          profiles (
+            id,
+            first_name,
+            last_name
+          )
+        )
+      `)
+      .eq('student_id', studentId);
+    
+    if (error) return { data: null, error };
+    
+    // Transform to return course data directly
+    const courses = data.map(enrollment => enrollment.courses);
+    
+    return { data: courses, error: null };
+  } catch (error) {
+    console.error('Error fetching student courses:', error);
+    return { data: null, error };
+  }
+};
+
+export const isStudentEnrolledInCourse = async (studentId, courseId) => {
+  try {
+    const { data, error } = await supabase
+      .from('course_students')
+      .select('id')
+      .eq('student_id', studentId)
+      .eq('course_id', courseId)
+      .limit(1);
+    
+    if (error) return { isEnrolled: false, error };
+    
+    return { isEnrolled: data && data.length > 0, error: null };
+  } catch (error) {
+    console.error('Error checking enrollment:', error);
+    return { isEnrolled: false, error };
+  }
+};
+
+// ========== Attendance Code Functions ==========
 export const createAttendanceCode = async ({ teacherId, courseId, code, validityMinutes = 5 }) => {
   const expiresAt = new Date();
   expiresAt.setMinutes(expiresAt.getMinutes() + validityMinutes);
@@ -267,6 +367,33 @@ export const validateAttendanceCode = async (code) => {
   }
 };
 
+export const getActiveAttendanceCodes = async (teacherId) => {
+  const now = new Date().toISOString();
+  
+  const { data, error } = await supabase
+    .from('attendance_codes')
+    .select(`
+      *,
+      courses(name, code)
+    `)
+    .eq('teacher_id', teacherId)
+    .gt('expires_at', now)
+    .order('created_at', { ascending: false });
+  
+  return { data, error };
+};
+
+export const deactivateAttendanceCode = async (codeId) => {
+  const { data, error } = await supabase
+    .from('attendance_codes')
+    .update({ expires_at: new Date().toISOString() })
+    .eq('id', codeId)
+    .select();
+  
+  return { data, error };
+};
+
+// ========== Attendance Functions ==========
 export const markAttendance = async (attendanceData) => {
   try {
     // Check if attendance already exists for this student and code
@@ -298,8 +425,20 @@ export const markAttendance = async (attendanceData) => {
       }])
       .select(`
         *,
-        courses(name, code),
-        profiles(first_name, last_name)
+        attendance_codes (
+          id,
+          code,
+          courses (
+            id,
+            name,
+            code
+          )
+        ),
+        profiles (
+          id,
+          first_name,
+          last_name
+        )
       `);
     
     if (error) {
@@ -310,6 +449,99 @@ export const markAttendance = async (attendanceData) => {
     return { data: data[0], error: null };
   } catch (error) {
     console.error('Error in markAttendance:', error);
+    return { data: null, error };
+  }
+};
+
+export const getStudentAttendance = async (studentId) => {
+  try {
+    const { data, error } = await supabase
+      .from('attendance')
+      .select(`
+        *,
+        attendance_codes (
+          id,
+          code,
+          created_at,
+          courses (
+            id,
+            name,
+            code
+          )
+        )
+      `)
+      .eq('student_id', studentId)
+      .order('created_at', { ascending: false });
+    
+    if (error) {
+      console.error('Error fetching attendance:', error);
+      return { data: [], error };
+    }
+    
+    // Transform data for dashboard use
+    const transformedData = data.map(record => ({
+      id: record.id,
+      date: record.created_at,
+      course_name: record.attendance_codes?.courses?.name || 'Unknown Course',
+      course_code: record.attendance_codes?.courses?.code || 'N/A',
+      time_in: new Date(record.created_at).toLocaleTimeString(),
+      is_late: record.is_late || false,
+      status: record.is_late ? 'Late' : 'Present',
+      latitude: record.latitude,
+      longitude: record.longitude
+    }));
+    
+    return { data: transformedData, error: null };
+  } catch (error) {
+    console.error('Error in getStudentAttendance:', error);
+    return { data: [], error };
+  }
+};
+
+export const getCourseAttendance = async (courseId) => {
+  const { data, error } = await supabase
+    .from('attendance')
+    .select(`
+      *,
+      profiles (
+        id,
+        first_name,
+        last_name,
+        roll_number
+      ),
+      attendance_codes (
+        id,
+        code,
+        created_at
+      )
+    `)
+    .eq('attendance_codes.course_id', courseId)
+    .order('created_at', { ascending: false });
+  
+  return { data, error };
+};
+
+export const getAttendanceStats = async (studentId) => {
+  try {
+    const { data, error } = await getStudentAttendance(studentId);
+    
+    if (error) return { data: null, error };
+    
+    const total = data.length;
+    const present = data.filter(record => !record.is_late).length;
+    const late = data.filter(record => record.is_late).length;
+    
+    return {
+      data: {
+        total,
+        present,
+        late,
+        presentPercentage: total > 0 ? Math.round((present / total) * 100) : 0,
+        latePercentage: total > 0 ? Math.round((late / total) * 100) : 0
+      },
+      error: null
+    };
+  } catch (error) {
     return { data: null, error };
   }
 };
@@ -389,6 +621,10 @@ export const submitHomework = async (submissionData) => {
   return { data, error };
 };
 
+export const submitAssignment = async (submissionData) => {
+  return submitHomework(submissionData);
+};
+
 export const getHomeworkSubmissions = async (homeworkId) => {
   const { data, error } = await supabase
     .from('homework_submissions')
@@ -454,6 +690,141 @@ export const getStudentHomeworkSubmission = async (homeworkId, studentId) => {
   return { data, error };
 };
 
+// ========== Additional Homework/Assignment Functions ==========
+export const getStudentSubmissions = async (studentId) => {
+  const { data, error } = await supabase
+    .from('homework_submissions')
+    .select(`
+      *,
+      homework (
+        id,
+        title,
+        description,
+        due_date,
+        courses (
+          id,
+          name,
+          code
+        )
+      )
+    `)
+    .eq('student_id', studentId)
+    .order('submitted_at', { ascending: false });
+  
+  return { data, error };
+};
+
+export const hasStudentSubmitted = async (homeworkId, studentId) => {
+  const { data, error } = await supabase
+    .from('homework_submissions')
+    .select('id')
+    .eq('homework_id', homeworkId)
+    .eq('student_id', studentId)
+    .limit(1);
+  
+  if (error) return { hasSubmitted: false, error };
+  
+  return { hasSubmitted: data && data.length > 0, error: null };
+};
+
+export const getUpcomingAssignments = async (studentId, limit = 5) => {
+  // First get student's enrolled courses
+  const { data: enrollments, error: enrollmentError } = await supabase
+    .from('course_students')
+    .select('course_id')
+    .eq('student_id', studentId);
+  
+  if (enrollmentError) return { data: null, error: enrollmentError };
+  
+  const courseIds = enrollments.map(enrollment => enrollment.course_id);
+  if (courseIds.length === 0) return { data: [], error: null };
+  
+  // Get upcoming assignments from enrolled courses
+  const { data, error } = await supabase
+    .from('homework')
+    .select(`
+      *,
+      courses (
+        id,
+        name,
+        code,
+        profiles (
+          id,
+          first_name,
+          last_name
+        )
+      ),
+      homework_submissions!left (
+        id,
+        student_id
+      )
+    `)
+    .in('course_id', courseIds)
+    .gte('due_date', new Date().toISOString())
+    .order('due_date', { ascending: true })
+    .limit(limit);
+  
+  return { data, error };
+};
+
+export const getOverdueAssignments = async (studentId) => {
+  // First get student's enrolled courses
+  const { data: enrollments, error: enrollmentError } = await supabase
+    .from('course_students')
+    .select('course_id')
+    .eq('student_id', studentId);
+  
+  if (enrollmentError) return { data: null, error: enrollmentError };
+  
+  const courseIds = enrollments.map(enrollment => enrollment.course_id);
+  if (courseIds.length === 0) return { data: [], error: null };
+  
+  // Get overdue assignments that haven't been submitted
+  const { data, error } = await supabase
+    .from('homework')
+    .select(`
+      *,
+      courses (
+        id,
+        name,
+        code
+      )
+    `)
+    .in('course_id', courseIds)
+    .lt('due_date', new Date().toISOString())
+    .order('due_date', { ascending: false });
+  
+  if (error) return { data: null, error };
+  
+  // Filter out assignments that have been submitted
+  const overdueAssignments = [];
+  for (const assignment of data) {
+    const { hasSubmitted } = await hasStudentSubmitted(assignment.id, studentId);
+    if (!hasSubmitted) {
+      overdueAssignments.push(assignment);
+    }
+  }
+  
+  return { data: overdueAssignments, error: null };
+};
+
+export const updateHomeworkSubmission = async (submissionId, updates) => {
+  const { data, error } = await supabase
+    .from('homework_submissions')
+    .update(updates)
+    .eq('id', submissionId)
+    .select();
+  return { data, error };
+};
+
+export const deleteHomeworkSubmission = async (submissionId) => {
+  const { data, error } = await supabase
+    .from('homework_submissions')
+    .delete()
+    .eq('id', submissionId);
+  return { data, error };
+};
+
 // ========== Utility Functions ==========
 export const uploadFile = async (bucketName, filePath, file) => {
   const { data, error } = await supabase
@@ -470,3 +841,85 @@ export const getFileUrl = (bucketName, filePath) => {
     .getPublicUrl(filePath);
   return data.publicUrl;
 };
+
+export const deleteFile = async (bucketName, filePath) => {
+  const { data, error } = await supabase
+    .storage
+    .from(bucketName)
+    .remove([filePath]);
+  return { data, error };
+};
+
+// ========== Real-time Subscriptions ==========
+export const subscribeToAttendance = (callback) => {
+  return supabase
+    .channel('attendance_changes')
+    .on('postgres_changes', 
+      { event: '*', schema: 'public', table: 'attendance' }, 
+      callback
+    )
+    .subscribe();
+};
+
+export const subscribeToAttendanceCodes = (callback) => {
+  return supabase
+    .channel('attendance_code_changes')
+    .on('postgres_changes', 
+      { event: '*', schema: 'public', table: 'attendance_codes' }, 
+      callback
+    )
+    .subscribe();
+};
+
+export const unsubscribeFromChannel = (channel) => {
+  supabase.removeChannel(channel);
+};
+
+// ========== Admin/Analytics Functions ==========
+export const getAttendanceAnalytics = async (courseId, startDate, endDate) => {
+  const { data, error } = await supabase
+    .from('attendance')
+    .select(`
+      *,
+      profiles (
+        first_name,
+        last_name,
+        roll_number
+      ),
+      attendance_codes (
+        course_id,
+        created_at
+      )
+    `)
+    .eq('attendance_codes.course_id', courseId)
+    .gte('created_at', startDate)
+    .lte('created_at', endDate)
+    .order('created_at', { ascending: true });
+  
+  return { data, error };
+};
+
+export const getCourseAttendanceReport = async (courseId) => {
+  const { data, error } = await supabase
+    .from('attendance')
+    .select(`
+      student_id,
+      is_late,
+      created_at,
+      profiles (
+        first_name,
+        last_name,
+        roll_number
+      ),
+      attendance_codes (
+        course_id
+      )
+    `)
+    .eq('attendance_codes.course_id', courseId)
+    .order('created_at', { ascending: false });
+  
+  return { data, error };
+};
+
+// Export default client for direct access if needed
+export default supabase;
