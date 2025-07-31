@@ -170,24 +170,7 @@ export const getAvailableCourses = async () => {
     .select('*');
   return { data, error };
 };
-
-// ========== Attendance Functions ==========
-export const getStudentAttendance = async (studentId) => {
-  const { data, error } = await supabase
-    .from('attendance')
-    .select('*')
-    .eq('student_id', studentId)
-    .order('created_at', { ascending: false });
-  return { data, error };
-};
-
-export const markAttendance = async (attendanceData) => {
-  const { data, error } = await supabase
-    .from('attendance')
-    .insert([attendanceData])
-    .select();
-  return { data, error };
-};
+// ========== Fixed Attendance Functions ==========
 
 export const createAttendanceCode = async ({ teacherId, courseId, code, validityMinutes = 5 }) => {
   const expiresAt = new Date();
@@ -198,7 +181,7 @@ export const createAttendanceCode = async ({ teacherId, courseId, code, validity
     .insert([{
       teacher_id: teacherId,
       course_id: courseId,
-      code,
+      code: code.toUpperCase(), // Ensure uppercase
       expires_at: expiresAt.toISOString()
     }])
     .select();
@@ -223,7 +206,7 @@ export const createAttendanceCodeWithLocation = async ({
     .insert([{
       teacher_id: teacherId,
       course_id: courseId,
-      code,
+      code: code.toUpperCase(), // Ensure uppercase
       expires_at: expiresAt.toISOString(),
       latitude,
       longitude,
@@ -235,48 +218,100 @@ export const createAttendanceCodeWithLocation = async ({
 };
 
 export const validateAttendanceCode = async (code) => {
-  const { data, error } = await supabase
-    .from('attendance_codes')
-    .select('*, courses(name)')
-    .eq('code', code)
-    .gt('expires_at', new Date().toISOString())
-    .single();
-  
-  return { data, error };
+  try {
+    // Convert to uppercase for consistency
+    const upperCode = code.toUpperCase().trim();
+    
+    // Get current time with buffer to account for small time differences
+    const now = new Date();
+    const bufferTime = new Date(now.getTime() - 30000); // 30 seconds buffer
+    
+    console.log('Validating code:', upperCode);
+    console.log('Current time:', now.toISOString());
+    console.log('Buffer time:', bufferTime.toISOString());
+    
+    const { data, error } = await supabase
+      .from('attendance_codes')
+      .select(`
+        *,
+        courses(name, code),
+        profiles(first_name, last_name)
+      `)
+      .eq('code', upperCode)
+      .gt('expires_at', bufferTime.toISOString())
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+    
+    if (error) {
+      console.error('Database error in validateAttendanceCode:', error);
+      return { data: null, error };
+    }
+    
+    // Additional check for expiration with logging
+    const expirationTime = new Date(data.expires_at);
+    console.log('Code expires at:', expirationTime.toISOString());
+    console.log('Is expired?', expirationTime <= now);
+    
+    if (expirationTime <= now) {
+      return { 
+        data: null, 
+        error: { message: 'Attendance code has expired' }
+      };
+    }
+    
+    return { data, error: null };
+  } catch (error) {
+    console.error('Error validating attendance code:', error);
+    return { data: null, error };
+  }
 };
 
-export const getStudentsByCourse = async (courseId) => {
-  const { data, error } = await supabase
-    .from('course_students')
-    .select(`
-      *,
-      profiles (
-        id,
-        first_name,
-        last_name,
-        roll_number,
-        email
-      )
-    `)
-    .eq('course_id', courseId);
-  return { data, error };
-};
-
-export const getStudentAttendanceByCourse = async (courseId) => {
-  const { data, error } = await supabase
-    .from('attendance')
-    .select(`
-      *,
-      profiles (
-        id,
-        first_name,
-        last_name,
-        roll_number
-      )
-    `)
-    .eq('course_id', courseId)
-    .order('created_at', { ascending: false });
-  return { data, error };
+export const markAttendance = async (attendanceData) => {
+  try {
+    // Check if attendance already exists for this student and code
+    const { data: existingAttendance, error: checkError } = await supabase
+      .from('attendance')
+      .select('id')
+      .eq('student_id', attendanceData.student_id)
+      .eq('attendance_code_id', attendanceData.attendance_code_id)
+      .limit(1);
+    
+    if (checkError) {
+      console.error('Error checking existing attendance:', checkError);
+      return { data: null, error: checkError };
+    }
+    
+    if (existingAttendance && existingAttendance.length > 0) {
+      return { 
+        data: null, 
+        error: { message: 'Attendance already marked for this code' }
+      };
+    }
+    
+    // Insert new attendance record
+    const { data, error } = await supabase
+      .from('attendance')
+      .insert([{
+        ...attendanceData,
+        created_at: new Date().toISOString()
+      }])
+      .select(`
+        *,
+        courses(name, code),
+        profiles(first_name, last_name)
+      `);
+    
+    if (error) {
+      console.error('Error inserting attendance:', error);
+      return { data: null, error };
+    }
+    
+    return { data: data[0], error: null };
+  } catch (error) {
+    console.error('Error in markAttendance:', error);
+    return { data: null, error };
+  }
 };
 
 // ========== Homework Functions ==========
